@@ -1,0 +1,89 @@
+; incremental rotary encoder and button handling in PIO
+; uses jumps conditioned on pin state to detect button presses
+; uses old and new pins values and a jump table to output encoder direction
+; DOES NOT TRACK ABSOLUTE ROTATION
+
+.program rotary_encoder
+.origin 0
+
+; State transition table for rotary encoder
+JMP STN     ; 0000 stationary
+JMP ACLCK   ; 0001 anticlockwise
+JMP CLCK    ; 0010 clockwise
+JMP STN     ; 0011 invalid transition
+JMP CLCK    ; 0100 clockwise
+JMP STN     ; 0101 stationary
+JMP STN     ; 0110 invalid transition
+JMP ACLCK   ; 0111 anticlockwise
+JMP ACLCK   ; 1000 anticlockwise
+JMP STN     ; 1001 invalid transition
+JMP STN     ; 1010 stationary
+JMP CLCK    ; 1011 clockwise
+JMP STN     ; 1100 invalid transition could be used for button handling
+JMP CLCK    ; 1101 clockwise
+JMP ACLCK   ; 1110 anticlockwise
+JMP STN     ; 1111 stationary
+
+.wrap_target    ; main program loop
+
+STN:
+JMP PIN HIGH    ; if button is high do nothing
+JMP !Y RE        ; if button is marked low do nothing
+SET Y 00000     ; mark button as low
+SET X 0     ; set IO code
+JMP RST
+
+HIGH:
+SET Y 00001     ; mark button as high
+
+RE:
+IN NULL, 32     ; clear input shift register
+IN OSR, 2       ; read previous bits from OSR
+IN PINS, 2      ; read new bits from pins
+MOV OSR, ISR    ; copy data to OSR for next cycle
+MOV PC, ISR     ; enter state transition table
+
+CLCK:
+SET X, 1    ; set IO code
+JMP RST
+
+ACLCK:
+SET X, 2    ; set IO code
+
+RST:
+IN X, 32        ; write IO code to ISR
+PUSH            ; push IO code to FIFO
+
+.wrap
+
+
+% c-sdk {
+// sets state machine parameters
+// offset must be 0 otherwise jump table breaks
+
+static inline void rotary_encoder_program_init(PIO pio, uint sm, uint offset, uint jmp_pin, uint in_pin, uint in_pin_count, float frequency) {
+    
+    pio_sm_config config = rotary_encoder_program_get_default_config(offset);   // init config
+
+    sm_config_set_jmp_pin(&config, jmp_pin);                                    // set jump pin
+    sm_config_set_in_pins(&config, in_pin);                                     // initialise input pins
+    pio_sm_set_consecutive_pindirs(pio, sm, in_pin, in_pin_count, true);
+    pio_gpio_init(pio, in_pin);
+    
+    sm_config_set_in_shift(&config, false, false, 32);                          // set ISR to shift right
+    sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_RX);                         // merge FIFOs
+
+    float clock_divider = (float) clock_get_hz(clk_sys) / frequency * 1000;     // slow clock speed to minimum to help with debouncing
+    sm_config_set_clkdiv(&config, clock_divider);
+
+    pio_sm_init(pio, sm, offset, &config);                                      // initialise state machine
+    
+    pio_sm_exec_wait_blocking (pio, sm, pio_encode_mov(pio_x, pio_null));       // force initial register values
+    pio_sm_exec_wait_blocking (pio, sm, pio_encode_mov(pio_y, pio_null));
+    pio_sm_exec_wait_blocking (pio, sm, pio_encode_mov(pio_isr, pio_null));
+    pio_sm_exec_wait_blocking (pio, sm, pio_encode_mov(pio_osr, pio_pins));
+
+    pio_sm_set_enabled(pio, sm, true);                                          // enable state machine
+}
+
+%}

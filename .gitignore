@@ -1,0 +1,11 @@
+# Ignore everything
+/*
+
+# But not these files...
+!.gitignore
+!pio_rotary_encoder.c
+!pio_rotary_encoder.pio
+!CMakeLists.txt
+# etc...
+
+
